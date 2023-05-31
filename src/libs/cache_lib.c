@@ -112,6 +112,19 @@ void init_cache(Cache* cache, const char* name, uns cache_size, uns assoc,
   /* allocate memory for NMRU replacement counters  */
   cache->repl_ctrs = (uns*)calloc(num_sets, sizeof(uns));
 
+  /* (Brendan): my understanding of the above (cache-> repl_ctrs) is shaky, but I think it stores the next entry in
+   * each set to be replaced, * and so it can't be re-used for SRRIP: we need a value for all entries, not a pointer to
+   * the next one to evict. Instead, allocating the M-bits per entry in a similar shape
+   */
+   if (cache->repl_policy == REPL_SRRIP) {
+    fprintf( mystdout, "(Brendan) REPL_POLICY = SSRIP for %s: %d\n", cache->name, cache->repl_policy);
+    ASSERT(0, RE_REF_INTERVAL_PRED_BITS);
+    cache->rrip_ctrs = (uns*)calloc(RE_REF_INTERVAL_PRED_BITS * num_sets, sizeof(uns));
+    fprintf( mystdout, "(Brendan) allocated rrip_ctrs of size (%d x %d) for %s\n", RE_REF_INTERVAL_PRED_BITS, num_sets, cache->name);
+  } else {
+    fprintf( mystdout, "(Brendan) REPL_POLICY is NOT SSRIP for %s: %d\n", cache->name, cache->repl_policy);
+  }
+
   /* allocate memory for all the sets (pointers to line arrays)  */
   cache->entries = (Cache_Entry**)malloc(sizeof(Cache_Entry*) * num_sets);
 
@@ -610,6 +623,7 @@ Cache_Entry* find_repl_entry(Cache* cache, uns8 proc_id, uns set, uns* way) {
   int ii;
   switch(cache->repl_policy) {
     case REPL_SHADOW_IDEAL:
+    case REPL_SRRIP:
     case REPL_TRUE_LRU: {
       uns     lru_ind  = 0;
       Counter lru_time = MAX_CTR;
@@ -628,7 +642,7 @@ Cache_Entry* find_repl_entry(Cache* cache, uns8 proc_id, uns set, uns* way) {
       return &cache->entries[set][lru_ind];
     } break;
     case REPL_RANDOM:
-    case REPL_NOT_MRU:
+    case REPL_NOT_MRU: // (Brendan: ) TODO: is this implemented correctly? seems to just pick one without checking NRU bit
     case REPL_ROUND_ROBIN:
     case REPL_LOW_PREF: {
       uns repl_index = cache->repl_ctrs[set];
@@ -753,6 +767,10 @@ static inline void update_repl_policy(Cache* cache, Cache_Entry* cur_entry,
     } break;
     case REPL_NOT_MRU:
       if(way == cache->repl_ctrs[set])
+        cache->repl_ctrs[set] = CIRC_INC2(cache->repl_ctrs[set], cache->assoc);
+      break;
+    case REPL_SRRIP:
+     if(way == cache->repl_ctrs[set])
         cache->repl_ctrs[set] = CIRC_INC2(cache->repl_ctrs[set], cache->assoc);
       break;
     case REPL_ROUND_ROBIN:
