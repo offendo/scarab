@@ -119,8 +119,10 @@ void init_cache(Cache* cache, const char* name, uns cache_size, uns assoc,
    if (cache->repl_policy == REPL_SRRIP) {
     fprintf( mystdout, "(Brendan) REPL_POLICY = SSRIP for %s: %d\n", cache->name, cache->repl_policy);
     ASSERT(0, RE_REF_INTERVAL_PRED_BITS);
-    cache->rrip_ctrs = (uns*)calloc(RE_REF_INTERVAL_PRED_BITS * num_sets, sizeof(uns));
-    fprintf( mystdout, "(Brendan) allocated rrip_ctrs of size (%d x %d) for %s\n", RE_REF_INTERVAL_PRED_BITS, num_sets, cache->name);
+    cache->rrip_ctrs = (uns*) calloc(cache->num_sets * cache->assoc, sizeof(uns*));
+    // we'll give an uns for each M-bit entry, and will just need to circular increment these to the appropriate M
+    // in cache policy management
+    fprintf( mystdout, "(Brendan) allocated rrip_ctrs of size (%d x %d) for %s\n", cache->num_sets, cache->assoc, cache->name);
   } else {
     fprintf( mystdout, "(Brendan) REPL_POLICY is NOT SSRIP for %s: %d\n", cache->name, cache->repl_policy);
   }
@@ -623,7 +625,6 @@ Cache_Entry* find_repl_entry(Cache* cache, uns8 proc_id, uns set, uns* way) {
   int ii;
   switch(cache->repl_policy) {
     case REPL_SHADOW_IDEAL:
-    case REPL_SRRIP:
     case REPL_TRUE_LRU: {
       uns     lru_ind  = 0;
       Counter lru_time = MAX_CTR;
@@ -645,6 +646,7 @@ Cache_Entry* find_repl_entry(Cache* cache, uns8 proc_id, uns set, uns* way) {
     case REPL_NOT_MRU: // (Brendan: ) TODO: is this implemented correctly? seems to just pick one without checking NRU bit
     case REPL_ROUND_ROBIN:
     case REPL_LOW_PREF: {
+      // (Brendan): if there is an invalid entry, use it, but otherwise default to the current way stored in repl_ctrs
       uns repl_index = cache->repl_ctrs[set];
       for(ii = 0; ii < cache->assoc; ii++) {
         Cache_Entry* entry = &cache->entries[set][ii];
@@ -654,6 +656,42 @@ Cache_Entry* find_repl_entry(Cache* cache, uns8 proc_id, uns set, uns* way) {
       *way = repl_index;
       return &cache->entries[set][repl_index];
     } break;
+    case REPL_SRRIP: {
+      // (Brendan): if there is an invalid entry, use it, but otherwise default to the current way stored in repl_ctrs
+      uns repl_index = cache->repl_ctrs[set];
+      fprintf( mystdout, "(Brendan) entered case REPL_SSRIP\n");
+      int foundOne = 0;
+      while (foundOne == 0) {
+        for(ii = 0; ii < cache->assoc; ii++) {
+            Cache_Entry* entry = &cache->entries[set][ii];
+            //fprintf( mystdout, "(Brendan) entry valid=%d\n", entry->valid);
+            //fprintf( mystdout, "(Brendan) entry rrip_ctrs=%d\n", cache->rrip_ctrs[(set * cache->assoc) + ii]);
+            if(!entry->valid) {
+              // (Brendan): if there is an invalid entry, use it
+              repl_index = ii;
+              foundOne = 1;
+              //fprintf( mystdout, "(Brendan) returning an invalid cache entry\n");
+              break;
+            } else if (cache->rrip_ctrs[(set * cache->assoc) + ii] == RE_REF_INTERVAL_PRED_BITS) {
+              // (Brendan) valid
+             // fprintf( mystdout, "(Brendan) found an entry at RRIP=%d for set=%d, way=%d\n", RE_REF_INTERVAL_PRED_BITS, set, ii);
+              repl_index = ii;
+              foundOne = 1;
+              break;
+            }
+        }
+        if (foundOne == 0) {
+             fprintf( mystdout, "(Brendan) no entry found, circular incrementing for RRIP=%d set=%d\n",
+               RE_REF_INTERVAL_PRED_BITS, set);
+             for(ii = 0; ii < cache->assoc; ii++) {
+                cache->rrip_ctrs[(set * cache->assoc) + ii] = CIRC_INC2(cache->rrip_ctrs[(set * cache->assoc) + ii], RE_REF_INTERVAL_PRED_BITS);
+             }
+         }
+      }
+      *way = repl_index;
+      return &cache->entries[set][repl_index];
+    } break;
+
     case REPL_IDEAL:
       printf("ERROR: Can't determine entry to be replaced when using ideal "
              "replacement\n");
