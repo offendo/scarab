@@ -54,7 +54,8 @@ typedef enum Repl_Policy_enum {
                          isn't stored at the cache */
   REPL_MLP,           /* mlp based replacement  -- uses MLP_REPL_POLICY */
   REPL_PARTITION,     /* Based on the partition*/
-  NUM_REPL
+  NUM_REPL,
+  REPL_SRRIP, /* (Brendan): SSRIP-based replacement (12) */
 } Repl_Policy;
 
 typedef struct Cache_Entry_struct {
@@ -101,6 +102,7 @@ typedef struct Cache_struct {
   Addr offset_mask; /* mask used to get the line offset */
 
   uns*          repl_ctrs; /* replacement info */
+  uns*          rrip_ctrs; /* (Brendan) replacement info for RRIP based methods */
   Cache_Entry** entries;   /* A dynamically allocated array of all
                               of the cache entries. The array is
                               two-dimensional, sets are row major. */
@@ -134,6 +136,7 @@ void* cache_insert_replpos_with_victim(Cache* cache, Cache* victim_cache,
                                        Addr*             repl_line_addr,
                                        Cache_Insert_Repl insert_repl_policy,
                                        Flag              isPrefetch);
+void print_cache_rrip(Cache*, uns);
 void* cache_insert_replpos(Cache* cache, uns8 proc_id, Addr addr,
                            Addr* line_addr, Addr* repl_line_addr,
                            Cache_Insert_Repl insert_repl_policy,
