@@ -27,6 +27,7 @@
  ***************************************************************************************/
 
 #include <stdlib.h>
+#include <math.h>
 #include "debug/debug_macros.h"
 #include "globals/assert.h"
 #include "globals/global_defs.h"
@@ -42,6 +43,7 @@
 
 // DeleteMe
 #define ideal_num_entries 256
+#define max_rrip_value ((uns) pow(2, RE_REF_INTERVAL_PRED_BITS) - 1)
 
 /**************************************************************************************/
 /* Macros */
@@ -67,7 +69,6 @@ static inline void         invalidate_unsure_line(Cache*, uns, Addr);
 
 char rand_repl_state[31];
 
-
 /**************************************************************************************/
 
 static inline uns cache_index(Cache* cache, Addr addr, Addr* tag,
@@ -80,7 +81,6 @@ static inline uns cache_index(Cache* cache, Addr addr, Addr* tag,
 uns ext_cache_index(Cache* cache, Addr addr, Addr* tag, Addr* line_addr) {
   return cache_index(cache, addr, tag, line_addr);
 }
-
 
 /**************************************************************************************/
 /* init_cache: */
@@ -610,7 +610,6 @@ void* get_next_repl_line(Cache* cache, uns8 proc_id, Addr addr,
   return new_line->data;
 }
 
-
 /**
  * @brief Returns the cache lib entry that will be the next to be
    replaced. This call should not change any of the state information.
@@ -659,35 +658,37 @@ Cache_Entry* find_repl_entry(Cache* cache, uns8 proc_id, uns set, uns* way) {
     case REPL_SRRIP: {
       // (Brendan): if there is an invalid entry, use it, but otherwise default to the current way stored in repl_ctrs
       uns repl_index = cache->repl_ctrs[set];
-      fprintf( mystdout, "(Brendan) entered case REPL_SSRIP\n");
+      //fprintf( mystdout, "(Brendan) entered case REPL_SSRIP\n");
       int foundOne = 0;
       while (foundOne == 0) {
         for(ii = 0; ii < cache->assoc; ii++) {
             Cache_Entry* entry = &cache->entries[set][ii];
-            //fprintf( mystdout, "(Brendan) entry valid=%d\n", entry->valid);
-            //fprintf( mystdout, "(Brendan) entry rrip_ctrs=%d\n", cache->rrip_ctrs[(set * cache->assoc) + ii]);
+            // fprintf( mystdout, "(Brendan) entry valid=%d\n", entry->valid);
+            // fprintf( mystdout, "(Brendan) entry rrip_ctrs=%d\n", cache->rrip_ctrs[(set * cache->assoc) + ii]);
             if(!entry->valid) {
               // (Brendan): if there is an invalid entry, use it
               repl_index = ii;
               foundOne = 1;
-              //fprintf( mystdout, "(Brendan) returning an invalid cache entry\n");
+              // fprintf( mystdout, "(Brendan) returning an invalid cache entry\n");
               break;
-            } else if (cache->rrip_ctrs[(set * cache->assoc) + ii] == RE_REF_INTERVAL_PRED_BITS) {
-              // (Brendan) valid
-             // fprintf( mystdout, "(Brendan) found an entry at RRIP=%d for set=%d, way=%d\n", RE_REF_INTERVAL_PRED_BITS, set, ii);
+            } else if (cache->rrip_ctrs[(set * cache->assoc) + ii] >= max_rrip_value) {
+              // (Brendan) valid AND one of the oldest: we should return
+              // fprintf( mystdout, "(Brendan) found an entry at RRIP=%d for set=%d, way=%d\n", RE_REF_INTERVAL_PRED_BITS, set, ii);
               repl_index = ii;
               foundOne = 1;
               break;
             }
         }
         if (foundOne == 0) {
-             fprintf( mystdout, "(Brendan) no entry found, circular incrementing for RRIP=%d set=%d\n",
-               RE_REF_INTERVAL_PRED_BITS, set);
+             // fprintf( mystdout, "(Brendan) no entry found, circular incrementing for RRIP=%d set=%d\n",
+             //  RE_REF_INTERVAL_PRED_BITS, set);
+             print_cache_rrip(cache, set);
              for(ii = 0; ii < cache->assoc; ii++) {
-                cache->rrip_ctrs[(set * cache->assoc) + ii] = CIRC_INC2(cache->rrip_ctrs[(set * cache->assoc) + ii], RE_REF_INTERVAL_PRED_BITS);
+                cache->rrip_ctrs[(set * cache->assoc) + ii] = cache->rrip_ctrs[(set * cache->assoc) + ii] + 1;
              }
          }
       }
+       //fprintf( mystdout, "(Brendan) while loop exit for RRIP=%d set=%d\n", RE_REF_INTERVAL_PRED_BITS, set);
       *way = repl_index;
       return &cache->entries[set][repl_index];
     } break;
@@ -807,10 +808,15 @@ static inline void update_repl_policy(Cache* cache, Cache_Entry* cur_entry,
       if(way == cache->repl_ctrs[set])
         cache->repl_ctrs[set] = CIRC_INC2(cache->repl_ctrs[set], cache->assoc);
       break;
-    case REPL_SRRIP:
-     if(way == cache->repl_ctrs[set])
-        cache->repl_ctrs[set] = CIRC_INC2(cache->repl_ctrs[set], cache->assoc);
-      break;
+    case REPL_SRRIP: {
+      // Brendan: set to 2^M - 2 on insert
+      if (repl) {
+          cache->rrip_ctrs[(set * cache->assoc) + way] = max_rrip_value - 1;
+      } else {
+          // Brendan: on hit, set to zero
+          cache->rrip_ctrs[(set * cache->assoc) + way] = 0;
+      }
+    } break;
     case REPL_ROUND_ROBIN:
       cache->repl_ctrs[set] = CIRC_INC2(cache->repl_ctrs[set], cache->assoc);
       break;
@@ -893,6 +899,15 @@ static inline void* access_unsure_lines(Cache* cache, uns set, Addr tag,
   return NULL;
 }
 
+void print_cache_rrip(Cache* cache, uns set) {
+    fprintf(mystdout, "== cache RRIP contents in %s == (%d)", cache->name, max_rrip_value);
+    for (int ii = 0; ii < cache-> assoc; ii++) {
+        Cache_Entry* entry = &cache->entries[set][ii];
+        fprintf(mystdout, " %d", entry->valid ? cache->rrip_ctrs[(set * cache->assoc) + ii] : -1);
+    }
+    fprintf(mystdout, "\n");
+
+}
 
 /**************************************************************************************/
 /* insert_sure_line: */

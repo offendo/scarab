@@ -136,6 +136,7 @@ void* cache_insert_replpos_with_victim(Cache* cache, Cache* victim_cache,
                                        Addr*             repl_line_addr,
                                        Cache_Insert_Repl insert_repl_policy,
                                        Flag              isPrefetch);
+void print_cache_rrip(Cache*, uns);
 void* cache_insert_replpos(Cache* cache, uns8 proc_id, Addr addr,
                            Addr* line_addr, Addr* repl_line_addr,
                            Cache_Insert_Repl insert_repl_policy,
