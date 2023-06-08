@@ -158,7 +158,7 @@ uns   get_partition_allocated(Cache* cache, uns8 proc_id);
 void print_cache_rrip(Cache* cache, uns set);
 
 
-void srrip_repl(Cache_Entry* cur_entry, Flag repl);
+void srrip_repl(Cache_Entry* cur_entry, Flag repl, Flag nru);
 void brrip_repl(Cache_Entry* cur_entry, Flag repl);
 void drrip_repl(Cache_Entry* cur_entry, Flag repl, uns set);
 /**************************************************************************************/
