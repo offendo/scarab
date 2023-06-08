@@ -57,6 +57,7 @@ typedef enum Repl_Policy_enum {
   REPL_SRRIP,         /* Static RRIP */
   REPL_BRRIP,         /* Bimodal RRIP */
   REPL_DRRIP,         /* Dynamic RRIP */
+  REPL_NRU,           /* NRU */
   NUM_REPL,
 } Repl_Policy;
 
