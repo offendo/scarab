@@ -1377,7 +1377,7 @@ void drrip_repl(Cache_Entry* cur_entry, Flag repl, uns set) {
       if(SRRIP_SDM_MISSES <= BRRIP_SDM_MISSES) {
         srrip_repl(cur_entry, repl, FALSE);
       } else {  // otherwise, use brrip
-        brrip_repl(cur_entry, repl, FALSE);
+        brrip_repl(cur_entry, repl);
       }
     }
   } else {
