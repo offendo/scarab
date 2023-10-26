@@ -752,7 +752,8 @@ Cache_Entry* find_repl_entry(Cache* cache, uns8 proc_id, uns set, uns* way) {
       return &cache->entries[set][lru_ind];
     }
 
-    case REPL_SRRIP:  // all three of these have the same replacement policy
+    case REPL_NRU: // all four of these have the same replacement policy
+    case REPL_SRRIP:
     case REPL_BRRIP:
     case REPL_DRRIP: {
       uns  rrip_victim_ind = 0;
@@ -853,8 +854,10 @@ static inline void update_repl_policy(Cache* cache, Cache_Entry* cur_entry,
         cache->repl_ctrs[set] = lru_ind;
       }
       break;
+    case REPL_NRU:
+      srrip_repl(cur_entry, repl, TRUE);
     case REPL_SRRIP:
-      srrip_repl(cur_entry, repl);
+      srrip_repl(cur_entry, repl, FALSE);
       break;
     case REPL_BRRIP:
       brrip_repl(cur_entry, repl);
@@ -1321,8 +1324,8 @@ void print_cache_rrip(Cache* cache, uns set) {
 }
 
 
-void srrip_repl(Cache_Entry* cur_entry, Flag repl) {
-  if(repl) {
+void srrip_repl(Cache_Entry* cur_entry, Flag repl, Flag nru) {
+  if(repl && !nru) {
     cur_entry->rrip_bits = (1 << SRRIP_PRED_BITS) - 2;
   } else {
     cur_entry->rrip_bits = 0;
@@ -1347,7 +1350,7 @@ void drrip_repl(Cache_Entry* cur_entry, Flag repl, uns set) {
   if(repl) {
     // Case 1: it's in the SRRIP sets
     if(set % DRRIP_SDM_SETS == 0) {
-      srrip_repl(cur_entry, repl);
+      srrip_repl(cur_entry, repl, FALSE);
     }
     // Case 2: it's in the BRRIP sets
     else if(set % DRRIP_SDM_SETS == 1) {
@@ -1372,7 +1375,7 @@ void drrip_repl(Cache_Entry* cur_entry, Flag repl, uns set) {
       // }
       // if srrip is better, do that
       if(SRRIP_SDM_MISSES <= BRRIP_SDM_MISSES) {
-        srrip_repl(cur_entry, repl);
+        srrip_repl(cur_entry, repl, FALSE);
       } else {  // otherwise, use brrip
         brrip_repl(cur_entry, repl);
       }
