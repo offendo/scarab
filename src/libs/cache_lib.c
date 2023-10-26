@@ -752,6 +752,7 @@ Cache_Entry* find_repl_entry(Cache* cache, uns8 proc_id, uns set, uns* way) {
       return &cache->entries[set][lru_ind];
     }
 
+
     case REPL_NRU: // all four of these have the same replacement policy
     case REPL_SRRIP:
     case REPL_BRRIP:
