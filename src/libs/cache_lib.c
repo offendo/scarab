@@ -26,7 +26,13 @@
  * Description  : This is a library of cache functions.
  ***************************************************************************************/
 
+#include <math.h>
+#include <stdbool.h>
+#include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
+#include <time.h>
+#include <unistd.h>
 #include "debug/debug_macros.h"
 #include "globals/assert.h"
 #include "globals/global_defs.h"
@@ -65,7 +71,9 @@ static inline void         invalidate_unsure_line(Cache*, uns, Addr);
 /**************************************************************************************/
 /* Global Variables */
 
-char rand_repl_state[31];
+char  rand_repl_state[31];
+float BRRIP_SDM_MISSES = 0, BRRIP_SDM_TOTAL = 0;
+float SRRIP_SDM_MISSES = 0, SRRIP_SDM_TOTAL = 0;
 
 
 /**************************************************************************************/
@@ -90,6 +98,7 @@ void init_cache(Cache* cache, const char* name, uns cache_size, uns assoc,
   uns num_lines = cache_size / line_size;
   uns num_sets  = cache_size / line_size / assoc;
   uns ii, jj;
+  srand(time(NULL));
 
   DEBUG(0, "Initializing cache called '%s'.\n", name);
 
@@ -210,6 +219,15 @@ void* cache_access(Cache* cache, Addr addr, Addr* line_addr, Flag update_repl) {
     return access_ideal_storage(cache, set, tag, addr);
   }
 
+  if(cache->repl_policy == REPL_DRRIP && strcmp(cache->name, "DCACHE") == 0 &&
+     update_repl) {
+    if(set % DRRIP_SDM_SETS == 0) {
+      SRRIP_SDM_TOTAL += 1;
+    } else if(set % DRRIP_SDM_SETS == 1) {
+      BRRIP_SDM_TOTAL += 1;
+    }
+  }
+
   for(ii = 0; ii < cache->assoc; ii++) {
     Cache_Entry* line = &cache->entries[set][ii];
 
@@ -226,7 +244,6 @@ void* cache_access(Cache* cache, Addr addr, Addr* line_addr, Flag update_repl) {
         cache->num_demand_access++;
         update_repl_policy(cache, line, set, ii, FALSE);
       }
-
       return line->data;
     }
   }
@@ -241,6 +258,14 @@ void* cache_access(Cache* cache, Addr addr, Addr* line_addr, Flag update_repl) {
     DEBUG(0, "Checking shadow cache '%s' at (set %u), base 0x%s\n", cache->name,
           set, hexstr64s(addr));
     return access_shadow_lines(cache, set, tag);
+  }
+  // if using DRRIP, increment the respective miss counts to track performance
+  if(cache->repl_policy == REPL_DRRIP && strcmp(cache->name, "DCACHE") == 0) {
+    if(set % DRRIP_SDM_SETS == 0) {
+      SRRIP_SDM_MISSES += 1;
+    } else if(set % DRRIP_SDM_SETS == 1) {
+      BRRIP_SDM_MISSES += 1;
+    }
   }
 
 
@@ -433,6 +458,7 @@ void* cache_insert_replpos(Cache* cache, uns8 proc_id, Addr addr,
     *repl_line_addr = 0;
   } else {
     new_line = find_repl_entry(cache, proc_id, set, &repl_index);
+
     /* before insert the data into cache, if the cache has shadow entry */
     /* insert that entry to the shadow cache */
     if((cache->repl_policy == REPL_SHADOW_IDEAL) && new_line->valid)
@@ -589,9 +615,8 @@ void* get_next_repl_line(Cache* cache, uns8 proc_id, Addr addr,
   uns          set_index = cache_index(cache, addr, &line_tag, &line_addr);
   Cache_Entry* new_line  = find_repl_entry(cache, proc_id, set_index,
                                            &repl_index);
-
-  *repl_line_addr = new_line->base;
-  *valid          = new_line->valid;
+  *repl_line_addr        = new_line->base;
+  *valid                 = new_line->valid;
   return new_line->data;
 }
 
@@ -727,7 +752,40 @@ Cache_Entry* find_repl_entry(Cache* cache, uns8 proc_id, uns set, uns* way) {
       return &cache->entries[set][lru_ind];
     }
 
+    case REPL_SRRIP:  // all three of these have the same replacement policy
+    case REPL_BRRIP:
+    case REPL_DRRIP: {
+      uns  rrip_victim_ind = 0;
+      bool found           = false;
+      while(!found) {
+        for(ii = 0; ii < cache->assoc; ii++) {
+          Cache_Entry* entry = &cache->entries[set][ii];
+          if(!entry->valid) {
+            rrip_victim_ind = ii;
+            found           = true;
+            break;
+          } else if(entry->rrip_bits >= (1 << SRRIP_PRED_BITS) - 1) {
+            rrip_victim_ind = ii;
+            found           = true;
+            break;
+          }
+        }
+        // if we didn't find any, increment all the cache entry RRIP bits by 1
+        // then try again
+        if(!found) {
+          for(ii = 0; ii < cache->assoc; ii++) {
+            Cache_Entry* entry = &cache->entries[set][ii];
+            if(entry->valid) {
+              entry->rrip_bits += 1;
+            }
+          }
+        }
+      }
+      // finally, we found a victim
+      *way = rrip_victim_ind;
+      return &cache->entries[set][rrip_victim_ind];
 
+    } break;
     default:
       ASSERT(0, FALSE);
   }
@@ -794,6 +852,15 @@ static inline void update_repl_policy(Cache* cache, Cache_Entry* cur_entry,
         }
         cache->repl_ctrs[set] = lru_ind;
       }
+      break;
+    case REPL_SRRIP:
+      srrip_repl(cur_entry, repl);
+      break;
+    case REPL_BRRIP:
+      brrip_repl(cur_entry, repl);
+      break;
+    case REPL_DRRIP:
+      drrip_repl(cur_entry, repl, set);
       break;
     default:
       ASSERT(0, FALSE);
@@ -1239,4 +1306,78 @@ uns get_partition_allocated(Cache* cache, uns8 proc_id) {
   ASSERT(proc_id, cache->repl_policy == REPL_PARTITION);
   ASSERT(proc_id, cache->num_ways_allocted_core);
   return cache->num_ways_allocted_core[proc_id];
+}
+
+
+void print_cache_rrip(Cache* cache, uns set) {
+  fprintf(stderr, "SRRIP_PRED_BITS: %d\n", (1 << SRRIP_PRED_BITS) - 2);
+  fprintf(mystdout, "== cache RRIP contents in %s set %d == (%d)", cache->name,
+          set, (1 << SRRIP_PRED_BITS) - 1);
+  for(int ii = 0; ii < cache->assoc; ii++) {
+    Cache_Entry* entry = &cache->entries[set][ii];
+    fprintf(mystdout, " %d", entry->valid ? entry->rrip_bits : -1);
+  }
+  fprintf(mystdout, "\n");
+}
+
+
+void srrip_repl(Cache_Entry* cur_entry, Flag repl) {
+  if(repl) {
+    cur_entry->rrip_bits = (1 << SRRIP_PRED_BITS) - 2;
+  } else {
+    cur_entry->rrip_bits = 0;
+  }
+}
+
+void brrip_repl(Cache_Entry* cur_entry, Flag repl) {
+  if(repl) {
+    float p = rand() / RAND_MAX;
+    if(p < BRRIP_2M_MINUS_1_PROB) {
+      cur_entry->rrip_bits = (1 << SRRIP_PRED_BITS) - 1;
+    } else {
+      cur_entry->rrip_bits = (1 << SRRIP_PRED_BITS) - 2;
+    }
+  } else {
+    cur_entry->rrip_bits = 0;
+  }
+}
+
+void drrip_repl(Cache_Entry* cur_entry, Flag repl, uns set) {
+  // float brrip_miss_rate = 1, srrip_miss_rate = 1;
+  if(repl) {
+    // Case 1: it's in the SRRIP sets
+    if(set % DRRIP_SDM_SETS == 0) {
+      srrip_repl(cur_entry, repl);
+    }
+    // Case 2: it's in the BRRIP sets
+    else if(set % DRRIP_SDM_SETS == 1) {
+      brrip_repl(cur_entry, repl);
+    }
+    // Case 3: it's in the rest of the cache; choose the best option
+    else {
+      // calculate miss rates
+      // if(BRRIP_SDM_TOTAL > 0) {
+      //   // brrip_miss_rate = BRRIP_SDM_MISSES / BRRIP_SDM_TOTAL;
+      //   // fprintf(stderr, "Bimodal miss rate: misses: %f\t total: %f\t %f\n",
+      //   // BRRIP_SDM_MISSES, BRRIP_SDM_TOTAL, brrip_miss_rate);
+      //   fprintf(stderr, "Bimodal miss rate: misses: %f\t total: %f\n",
+      //           BRRIP_SDM_MISSES, BRRIP_SDM_TOTAL);
+      // }
+      // if(SRRIP_SDM_TOTAL > 0) {
+      //   // srrip_miss_rate = SRRIP_SDM_MISSES / SRRIP_SDM_TOTAL;
+      //   // fprintf(stderr, "Static miss rate: misses: %f\t total: %f\t %f\n",
+      //   // SRRIP_SDM_MISSES, SRRIP_SDM_TOTAL, srrip_miss_rate);
+      //   fprintf(stderr, "Static miss rate: misses: %f\t total: %f\n",
+      //           SRRIP_SDM_MISSES, SRRIP_SDM_TOTAL);
+      // }
+      // if srrip is better, do that
+      if(SRRIP_SDM_MISSES <= BRRIP_SDM_MISSES) {
+        srrip_repl(cur_entry, repl);
+      } else {  // otherwise, use brrip
+        brrip_repl(cur_entry, repl);
+      }
+    }
+  } else {
+    cur_entry->rrip_bits = 0;
+  }
 }

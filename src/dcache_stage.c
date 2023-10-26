@@ -26,6 +26,7 @@
  * Description  :
  ***************************************************************************************/
 
+#include <malloc.h>
 #include "debug/debug_macros.h"
 #include "debug/debug_print.h"
 #include "globals/assert.h"
@@ -113,11 +114,11 @@ void init_dcache_stage(uns8 proc_id, const char* name) {
 
      The rest are capacity misses.
    */
-  uns full_assoc = DCACHE_SIZE / DCACHE_LINE_SIZE;
-  init_cache(&dc->fa_dcache, "FA_DCACHE", DCACHE_SIZE, full_assoc,
-             DCACHE_LINE_SIZE, sizeof(Dcache_Data), DCACHE_REPL);
-  init_hash_table(&dc->compulsory_table, "COMPULSORY_MISS_TABLE", DCACHE_SIZE,
-                  sizeof(Addr));
+  // uns full_assoc = DCACHE_SIZE / DCACHE_LINE_SIZE;
+  // init_cache(&dc->fa_dcache, "FA_DCACHE", DCACHE_SIZE, full_assoc,
+  //            DCACHE_LINE_SIZE, sizeof(Dcache_Data), DCACHE_REPL);
+  // init_hash_table(&dc->compulsory_table, "COMPULSORY_MISS_TABLE", DCACHE_SIZE,
+  //                 sizeof(Addr));
 
   reset_dcache_stage();
 
@@ -352,11 +353,11 @@ void update_dcache_stage(Stage_Data* src_sd) {
        misses rather than capacity misses. Now we only insert if it should be
        inserted, which fixes it.
      */
-    if(line) {
-      Addr fa_line_addr, fa_repl_line_addr;
-      cache_insert(&dc->fa_dcache, dc->proc_id, line_addr, &fa_line_addr,
-                   &fa_repl_line_addr);
-    }
+    // if(line) {
+    //   Addr fa_line_addr, fa_repl_line_addr;
+    //   cache_insert(&dc->fa_dcache, dc->proc_id, line_addr, &fa_line_addr,
+    //                &fa_repl_line_addr);
+    // }
 
     op->dcache_cycle = cycle_count;
     dc->idle_cycle   = MAX2(dc->idle_cycle, cycle_count + DCACHE_CYCLES);
@@ -500,7 +501,7 @@ void update_dcache_stage(Stage_Data* src_sd) {
           }
 
           if(!op->off_path) {
-            handle_3c_counts(op, line_addr);
+            //handle_3c_counts(op, line_addr);
             STAT_EVENT(op->proc_id, DCACHE_MISS);
             STAT_EVENT(op->proc_id, DCACHE_MISS_ONPATH);
             STAT_EVENT(op->proc_id, DCACHE_MISS_LD_ONPATH);
@@ -556,7 +557,7 @@ void update_dcache_stage(Stage_Data* src_sd) {
           }
 
           if(!op->off_path) {
-            handle_3c_counts(op, line_addr);
+            // handle_3c_counts(op, line_addr);
             STAT_EVENT(op->proc_id, DCACHE_MISS);
             STAT_EVENT(op->proc_id, DCACHE_MISS_ONPATH);
             STAT_EVENT(op->proc_id, DCACHE_MISS_LD_ONPATH);
@@ -615,7 +616,7 @@ void update_dcache_stage(Stage_Data* src_sd) {
           }
 
           if(!op->off_path) {
-            handle_3c_counts(op, line_addr);
+            // handle_3c_counts(op, line_addr);
             STAT_EVENT(op->proc_id, DCACHE_MISS);
             STAT_EVENT(op->proc_id, DCACHE_MISS_ONPATH);
             STAT_EVENT(op->proc_id, DCACHE_MISS_ST_ONPATH);
@@ -711,6 +712,10 @@ Flag dcache_fill_line(Mem_Req* req) {
     Flag repl_line_valid;
     data = (Dcache_Data*)get_next_repl_line(&dc->dcache, dc->proc_id, req->addr,
                                             &repl_line_addr, &repl_line_valid);
+    if(!data) {
+      STAT_EVENT(dc->proc_id, DCACHE_SRRIP_SKIP);
+      return FAILURE;
+    }
     if(repl_line_valid && data->dirty) {
       /* need to do a write-back */
       uns repl_proc_id = get_proc_id_from_cmp_addr(repl_line_addr);
@@ -748,7 +753,6 @@ Flag dcache_fill_line(Mem_Req* req) {
       STAT_EVENT(dc->proc_id, DCACHE_WB_REQ_DIRTY);
       STAT_EVENT(dc->proc_id, DCACHE_WB_REQ);
     }
-
     /* (nilay) If we're using the victim cache, make sure we put any lines
      * evicted from main cache in the victim cache.
      */
